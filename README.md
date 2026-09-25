@@ -9,12 +9,13 @@ An in-game version of the Force the Hand of Fate planner, with a few extras.
 - Under Gambler's Fever Dream: which spell GFD will pick and what it will do (for example `FtHoF → CF`).
 - A row with the next 10 casts. Hover one to see both possible outcomes and how many golden cookies on screen make it backfire.
 - For each of your filters, how many casts away the next match is (for example `CF + BS in 2 casts: in 7 casts`). Cast cheap spells to burn through the rolls in between.
-- **Planner** button: a table of the next 40 casts.
+- **Planner** button: a table of the next 40 casts. Each cast shows its success and backfire result without a season change, then with a season change (switching to or from Easter/Valentine's adds or removes a roll, and doesn't use up a cast).
 - The spell tooltips get a planner section.
 
 **On the ascension screen**
 - A panel in the bottom-left keeps rerolling the next run's seed until its FtHoF outcomes match your filters. The seed is applied when you click Reincarnate.
 - Filters: "within the first N casts, K casts in a row containing at least X Click Frenzy / Building Special / Elder Frenzy / …". Add as many as you want; all of them must match.
+- **I'll change seasons during my combo** (off by default): when on, each cast in a filter can use either its no-season-change or its season-change result. Casts that need a season change are marked ⇄.
 - "Click each GC before the next cast" or "let GCs stack". Each golden cookie still on screen adds +15% backfire, which matters for Elder Frenzy combos.
 - Assumptions for the next run: season (Easter and Valentine's add an extra roll), Supreme Intellect, 10+ buildings (otherwise there's no Building Special), Dragonflight (no Click Frenzy).
 - If a search is still running when you reincarnate, you're asked whether to keep searching or use a random seed.

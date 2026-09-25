@@ -132,52 +132,101 @@
     return Math.max(0, n);
   }
 
-  /** Lazily computes outcomes for consecutive casts of one seed. */
+  /**
+   * Lazily computes outcomes for consecutive casts of one seed.
+   * at() uses the season in `env`; seasonAt() is the same cast after a season change
+   * (switching to/from Easter or Valentine's adds/removes the season roll).
+   */
   function SeedView(seed, startIndex, env) {
     this.seed = seed;
     this.start = startIndex;
     this.env = env;
+    this.altEnv = { seasonRoll: !env.seasonRoll, dragonflight: env.dragonflight, buildings10: env.buildings10 };
+    this.rolls = [];
     this.list = [];
+    this.alt = [];
   }
+  SeedView.prototype.rollsAt = function (offset) {
+    var r = this.rolls[offset];
+    if (!r) r = this.rolls[offset] = castRolls(this.seed, this.start + offset);
+    return r;
+  };
   SeedView.prototype.at = function (offset) {
     var o = this.list[offset];
-    if (!o) o = this.list[offset] = castOutcome(castRolls(this.seed, this.start + offset), this.env);
+    if (!o) o = this.list[offset] = castOutcome(this.rollsAt(offset), this.env);
+    return o;
+  };
+  SeedView.prototype.seasonAt = function (offset) {
+    var o = this.alt[offset];
+    if (!o) o = this.alt[offset] = castOutcome(this.rollsAt(offset), this.altEnv);
     return o;
   };
 
   /**
+   * Checks whether the `filter.k` casts starting at `s` contain at least the required counts.
+   * With seasonChanges, each cast may instead use its season-change outcome.
+   * Returns picks (per cast: 0 = no season change, 1 = season change) or null.
+   */
+  function matchWindow(view, s, filter, baseFail, seasonChanges) {
+    var need = {},
+      remaining = 0;
+    for (var key in filter.req) {
+      if (filter.req[key] > 0) {
+        need[key] = filter.req[key];
+        remaining += need[key];
+      }
+    }
+    var picks = [];
+    for (var p = 0; p < filter.k; p++) picks.push(0);
+    if (remaining > filter.k) return null;
+
+    var opts = [];
+    for (var i = 0; i < filter.k; i++) {
+      var fail = baseFail + 0.15 * (filter.stack ? i : 0);
+      var a = resolve(view.at(s + i), fail);
+      var b = seasonChanges ? resolve(view.seasonAt(s + i), fail) : a;
+      opts.push(b === a ? [a] : [a, b]);
+    }
+
+    // Using a cast for a still-needed force is never worse than skipping it,
+    // so we only branch between a cast's two outcomes.
+    function dfs(i, left) {
+      if (left === 0) return true;
+      if (filter.k - i < left) return false;
+      var used = false;
+      for (var c = 0; c < opts[i].length; c++) {
+        var force = opts[i][c];
+        if (!(need[force] > 0)) continue;
+        used = true;
+        need[force]--;
+        picks[i] = c;
+        if (dfs(i + 1, left - 1)) return true;
+        need[force]++;
+      }
+      picks[i] = 0;
+      return used ? false : dfs(i + 1, left);
+    }
+    return dfs(0, remaining) ? picks : null;
+  }
+
+  /**
    * Finds the first window of `filter.k` consecutive casts, starting within the first
    * `filter.n` casts, that contains at least the required counts.
-   * Returns the window start offset or -1.
+   * Returns { start, picks } or null.
    */
-  function findWindow(view, filter, baseFail) {
-    var keys = [];
-    for (var key in filter.req) if (filter.req[key] > 0) keys.push(key);
+  function findWindow(view, filter, baseFail, seasonChanges) {
     var last = filter.n - filter.k;
     for (var s = 0; s <= last; s++) {
-      if (!keys.length) return s;
-      var counts = {};
-      for (var i = 0; i < filter.k; i++) {
-        var onScreen = filter.stack ? i : 0;
-        var force = resolve(view.at(s + i), baseFail + 0.15 * onScreen);
-        counts[force] = (counts[force] || 0) + 1;
-      }
-      var ok = true;
-      for (var j = 0; j < keys.length; j++) {
-        if ((counts[keys[j]] || 0) < filter.req[keys[j]]) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok) return s;
+      var picks = matchWindow(view, s, filter, baseFail, seasonChanges);
+      if (picks) return { start: s, picks: picks };
     }
-    return -1;
+    return null;
   }
 
   function seedMatches(seed, ctx) {
     var view = new SeedView(seed, ctx.start, ctx.env);
     for (var i = 0; i < ctx.filters.length; i++) {
-      if (findWindow(view, ctx.filters[i], ctx.baseFail) < 0) return false;
+      if (!findWindow(view, ctx.filters[i], ctx.baseFail, ctx.seasonChanges)) return false;
     }
     return true;
   }
@@ -196,6 +245,7 @@
     resolve: resolve,
     backfireThreshold: backfireThreshold,
     SeedView: SeedView,
+    matchWindow: matchWindow,
     findWindow: findWindow,
     seedMatches: seedMatches,
     randomSeed: randomSeed,
@@ -261,6 +311,7 @@
     supremeIntellect: "auto", // auto | on | off
     buildings10: 1,
     dragonflight: 0,
+    seasonChanges: 0, // let filters use the season-change outcome of a cast
     filters: [defaultFilter()],
   };
 
@@ -290,6 +341,31 @@
     }
     return (parts.length ? parts.join(" + ") : "anything") + " in " + f.k + " cast" + (f.k > 1 ? "s" : "") + (f.stack ? " (stacked)" : "");
   }
+  /**
+   * Matches every filter against a view. `n` overrides each filter's search range.
+   * hits[offset] is 1 for a matching cast, 2 if it needs a season change first.
+   */
+  function filterHits(view, filters, baseFail, n) {
+    var hits = {},
+      matches = [];
+    for (var i = 0; i < filters.length; i++) {
+      var f = filters[i];
+      var m = findWindow(view, n ? { n: n, k: f.k, stack: f.stack, req: f.req } : f, baseFail, settings.seasonChanges);
+      matches.push({ filter: f, start: m ? m.start : -1 });
+      if (m) for (var j = 0; j < f.k; j++) hits[m.start + j] = Math.max(hits[m.start + j] || 0, m.picks[j] ? 2 : 1);
+    }
+    return { hits: hits, matches: matches };
+  }
+
+  /** The force shown for a cast: the season-change outcome when a filter match needs it. */
+  function hitForce(view, offset, hit, failChance) {
+    return hit === 2 ? forceSpan(resolve(view.seasonAt(offset), failChance), true) + '<span class="fthofSeason" title="Change season before this cast">&#8644;</span>' : forceSpan(resolve(view.at(offset), failChance), true);
+  }
+
+  function seasonChangeLabel(env) {
+    return env.seasonRoll ? "to a season other than Easter/Valentine's" : "to Easter or Valentine's";
+  }
+
   function normalizeFilters(list) {
     var out = [];
     for (var i = 0; i < (list || []).length; i++) {
@@ -408,6 +484,10 @@
       "#fthofPlanTable td,#fthofPlanTable th{padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);text-align:left;white-space:nowrap;}" +
       "#fthofPlanTable th{color:#ccc;}" +
       "#fthofPlanTable tr.fthofHit td{background:rgba(100,255,100,0.08);}" +
+      "#fthofPlanTable tr.fthofHit td.fthofHitCell{background:rgba(100,255,100,0.22);}" +
+      "#fthofPlanTable th{text-align:center;}" +
+      "#fthofPlanTable .fthofSeasonCol{border-left:1px solid rgba(255,255,255,0.25);}" +
+      ".fthofSeason{color:#8cf;margin-left:2px;}" +
       "#fthofAscendPanel{position:fixed;left:12px;bottom:12px;width:370px;max-height:calc(100vh - 24px);overflow-y:auto;z-index:100000000;background:rgba(0,0,0,0.85);border:1px solid rgba(255,255,255,0.3);border-radius:6px;box-shadow:0 0 12px #000;color:#fff;font-family:Tahoma,Arial,sans-serif;font-size:11px;padding:8px;display:none;}" +
       "#fthofAscendPanel h4{margin:0 0 6px 0;font-size:13px;cursor:pointer;}" +
       "#fthofAscendPanel input[type=number]{width:34px;background:#222;color:#fff;border:1px solid #555;border-radius:2px;font-size:11px;padding:1px 2px;}" +
@@ -475,7 +555,9 @@
     var now = resolve(o, state.failNow);
     var threshold = backfireThreshold(o.roll, state.baseFail);
     var str = "Result now: <b>" + forceSpan(now) + "</b> <small>(" + state.onScreen + " GC on screen)</small><br>";
-    str += "If it succeeds: " + forceSpan(o.win) + " &middot; If it backfires: " + forceSpan(o.fail) + "<br>";
+    var alt = state.view.seasonAt(offset);
+    str += "No season change: " + forceSpan(o.win) + " / backfire " + forceSpan(o.fail) + "<br>";
+    str += "Season change <small>(" + seasonChangeLabel(state.env) + ")</small>: " + forceSpan(alt.win) + " / backfire " + forceSpan(alt.fail) + "<br>";
     str += '<small class="fthofMuted">Roll ' + o.roll.toFixed(4) + " &middot; ";
     str += threshold === 0 ? "backfires even with no golden cookies on screen" : "backfires with " + threshold + "+ golden cookies on screen";
     return str + "</small>";
@@ -512,19 +594,12 @@
     if (underG) underG.innerHTML = settings.showUnderSpell ? gfdLabel(gfdPrediction(M, state, 0), true) : "";
 
     // Upcoming casts + next filter matches.
-    var hits = {};
-    var matches = [];
-    var filters = settings.filters;
-    for (var i = 0; i < filters.length; i++) {
-      var f = filters[i];
-      var s = findWindow(state.view, { n: 200, k: f.k, stack: f.stack, req: f.req }, state.baseFail);
-      matches.push({ filter: f, start: s });
-      if (s >= 0) for (var j = 0; j < f.k; j++) hits[s + j] = 1;
-    }
+    var fh = filterHits(state.view, settings.filters, state.baseFail, 200);
+    var hits = fh.hits,
+      matches = fh.matches;
     var str = '<div class="fthofMuted" style="margin-bottom:2px;">Next FtHoF casts <small>(' + state.onScreen + " GC on screen, " + Math.round(state.failNow * 100) + "% backfire)</small></div>";
     for (var c = 0; c < settings.upcomingCount; c++) {
-      var force = resolve(state.view.at(c), state.baseFail + 0.15 * state.onScreen);
-      str += '<span class="fthofChip' + (hits[c] ? " fthofHit" : "") + '" ' + Game.getDynamicTooltip("FtHoFPlanner.chipTooltip(" + c + ")", "this") + '><span class="fthofIdx">+' + c + "</span>" + forceSpan(force, true) + "</span>";
+      str += '<span class="fthofChip' + (hits[c] ? " fthofHit" : "") + '" ' + Game.getDynamicTooltip("FtHoFPlanner.chipTooltip(" + c + ")", "this") + '><span class="fthofIdx">+' + c + "</span>" + hitForce(state.view, c, hits[c], state.failNow) + "</span>";
     }
     str += '<div class="fthofMatch">';
     for (var m = 0; m < matches.length; m++) {
@@ -540,26 +615,28 @@
     var M = getGrimoire();
     if (!M) return;
     var state = computeLive(M);
-    var hits = {};
-    for (var i = 0; i < settings.filters.length; i++) {
-      var f = settings.filters[i];
-      var s = findWindow(state.view, { n: 200, k: f.k, stack: f.stack, req: f.req }, state.baseFail);
-      if (s >= 0) for (var j = 0; j < f.k; j++) hits[s + j] = 1;
-    }
+    var hits = filterHits(state.view, settings.filters, state.baseFail, 200).hits;
     var rows = "";
     for (var c = 0; c < 40; c++) {
-      var o = state.view.at(c);
+      var o = state.view.at(c),
+        alt = state.view.seasonAt(c);
       var th = backfireThreshold(o.roll, state.baseFail);
+      var sameCell = hits[c] === 1 ? ' class="fthofHitCell"' : "",
+        altCell = hits[c] === 2 ? ' class="fthofHitCell"' : "";
       rows +=
-        "<tr" + (hits[c] ? ' class="fthofHit"' : "") + "><td>+" + c + "</td><td>" + (state.index + c + 1) + "</td><td><b>" + forceSpan(resolve(o, state.baseFail + 0.15 * state.onScreen)) + "</b></td><td>" +
-        forceSpan(o.win) + "</td><td>" + forceSpan(o.fail) + "</td><td>" + (th === 0 ? '<span style="color:#f66;">always</span>' : th + "+ GC") + "</td><td>" + gfdLabel(gfdPrediction(M, state, c), true) + "</td></tr>";
+        "<tr" + (hits[c] ? ' class="fthofHit"' : "") + "><td>+" + c + "</td><td>" + (state.index + c + 1) + "</td><td><b>" + forceSpan(resolve(o, state.failNow)) + "</b></td>" +
+        "<td" + sameCell + ">" + forceSpan(o.win) + "</td><td" + sameCell + ">" + forceSpan(o.fail) + "</td>" +
+        '<td class="fthofSeasonCol"' + altCell + ">" + forceSpan(alt.win) + "</td><td" + altCell + ">" + forceSpan(alt.fail) + "</td>" +
+        "<td>" + (th === 0 ? '<span style="color:#f66;">always</span>' : th + "+ GC") + "</td><td>" + gfdLabel(gfdPrediction(M, state, c), true) + "</td></tr>";
     }
     Game.Prompt(
       "<id FtHoFPlanner><h3>Force the Hand of Fate planner</h3>" +
-        '<div class="block" style="font-size:11px;">Seed <b>' + esc(state.seed) + "</b> &middot; " + state.index + " spells cast so far &middot; " + state.onScreen + " GC on screen" +
-        (state.env.seasonRoll ? " &middot; season adds a roll" : "") + (state.env.dragonflight ? " &middot; Dragonflight (no Click Frenzy)" : "") + (!state.env.buildings10 ? " &middot; fewer than 10 buildings (no Building Special)" : "") +
-        '<table id="fthofPlanTable"><tr><th>Cast</th><th>#</th><th>Now</th><th>If it succeeds</th><th>If it backfires</th><th>Backfires at</th><th>GFD here</th></tr>' + rows + "</table>" +
-        '<small class="fthofMuted">Every spell you cast (not just FtHoF) moves you down one row. Green rows match your filters. GFD uses the next row for the spell it casts.</small></div>',
+        '<div class="block" style="font-size:11px;">Seed <b>' + esc(state.seed) + "</b> &middot; " + state.index + " spells cast so far &middot; " + state.onScreen + " GC on screen &middot; season: " + esc(Game.season || "none") +
+        (state.env.dragonflight ? " &middot; Dragonflight (no Click Frenzy)" : "") + (!state.env.buildings10 ? " &middot; fewer than 10 buildings (no Building Special)" : "") +
+        '<table id="fthofPlanTable"><tr><th rowspan="2">Cast</th><th rowspan="2">#</th><th rowspan="2">Now</th><th colspan="2">No season change</th><th colspan="2" class="fthofSeasonCol">Season change <small>(' + seasonChangeLabel(state.env) + ')</small></th><th rowspan="2">Backfires at</th><th rowspan="2">GFD here</th></tr>' +
+        '<tr><th>Success</th><th>Backfire</th><th class="fthofSeasonCol">Success</th><th>Backfire</th></tr>' + rows + "</table>" +
+        '<small class="fthofMuted">Every spell you cast (not just FtHoF) moves you down one row. Changing the season does not. Success or backfire is the same with or without a season change (see "Backfires at"). Green rows match your filters' +
+        (settings.seasonChanges ? "; the highlighted pair shows whether that cast needs a season change" : "") + ". GFD uses the next row for the spell it casts.</small></div>",
       [["Close", "Game.ClosePrompt();"]],
       0,
       "widePrompt"
@@ -587,6 +664,7 @@
       start: nextRunSpellIndex(),
       baseFail: 0.15 * (1 + 0.1 * si),
       env: { seasonRoll: seasonRoll, dragonflight: !!settings.dragonflight, buildings10: !!settings.buildings10 },
+      seasonChanges: !!settings.seasonChanges,
       filters: settings.filters,
     };
   }
@@ -695,7 +773,9 @@
     str += '<div id="fthofAscStatus">' + statusText() + "</div>";
     if (P.pendingSeed) str += previewHtml(P.pendingSeed, ctx);
 
-    str += '<div class="fthofSection"><b>Filters</b> <small class="fthofMuted">(all must match)</small>';
+    str += '<div class="fthofSection"><b>Filters</b> <small class="fthofMuted">(all must match)</small><br>';
+    str += '<label title="Switching to or from Easter/Valentine\'s changes what a cast gives without using up a spell."><input type="checkbox" data-set="seasonChanges"' + (settings.seasonChanges ? " checked" : "") + "> I'll change seasons during my combo</label>";
+    str += '<div class="fthofMuted">' + (settings.seasonChanges ? "Each cast can use its no-season-change or season-change result." : "Off: only results without a season change count.") + "</div>";
     for (var i = 0; i < settings.filters.length; i++) {
       var f = settings.filters[i];
       str += '<div class="fthofFilter">';
@@ -758,19 +838,23 @@
     var view = new SeedView(seed, ctx.start, ctx.env);
     var count = 10;
     for (var i = 0; i < ctx.filters.length; i++) count = Math.max(count, Math.min(ctx.filters[i].n, 30));
-    var hits = {};
+    var fh = filterHits(view, ctx.filters, ctx.baseFail, 0);
+    var hits = fh.hits;
     var lines = "";
-    for (var f = 0; f < ctx.filters.length; f++) {
-      var s = findWindow(view, ctx.filters[f], ctx.baseFail);
-      lines += "<div>" + esc(filterLabel(ctx.filters[f])) + ": " + (s < 0 ? '<span style="color:#f66;">no</span>' : '<span style="color:#6f6;">casts ' + (s + 1) + (ctx.filters[f].k > 1 ? "-" + (s + ctx.filters[f].k) : "") + "</span>") + "</div>";
-      if (s >= 0) for (var j = 0; j < ctx.filters[f].k; j++) hits[s + j] = 1;
+    for (var f = 0; f < fh.matches.length; f++) {
+      var s = fh.matches[f].start,
+        k = fh.matches[f].filter.k;
+      lines += "<div>" + esc(filterLabel(fh.matches[f].filter)) + ": " + (s < 0 ? '<span style="color:#f66;">no</span>' : '<span style="color:#6f6;">casts ' + (s + 1) + (k > 1 ? "-" + (s + k) : "") + "</span>") + "</div>";
     }
     var chips = "";
     for (var c = 0; c < count; c++) {
-      var o = view.at(c);
-      chips += '<span class="fthofChip' + (hits[c] ? " fthofHit" : "") + '" title="If it succeeds: ' + FORCES[o.win].name + " / If it backfires: " + FORCES[o.fail].name + '"><span class="fthofIdx">' + (c + 1) + "</span>" + forceSpan(resolve(o, ctx.baseFail), true) + "</span>";
+      var o = view.at(c),
+        alt = view.seasonAt(c);
+      var title = "No season change: " + FORCES[o.win].name + " / backfire " + FORCES[o.fail].name + "\nSeason change: " + FORCES[alt.win].name + " / backfire " + FORCES[alt.fail].name;
+      chips += '<span class="fthofChip' + (hits[c] ? " fthofHit" : "") + '" title="' + esc(title) + '"><span class="fthofIdx">' + (c + 1) + "</span>" + hitForce(view, c, hits[c], ctx.baseFail) + "</span>";
     }
-    return '<div style="margin-top:4px;">' + chips + '</div><div class="fthofMatch">' + lines + "</div>";
+    var legend = ctx.seasonChanges ? '<div class="fthofMuted"><span class="fthofSeason">&#8644;</span> = change season (' + esc(seasonChangeLabel(ctx.env)) + ") before that cast</div>" : "";
+    return '<div style="margin-top:4px;">' + chips + '</div><div class="fthofMatch">' + lines + legend + "</div>";
   }
 
   function onPanelClick(e) {
