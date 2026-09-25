@@ -480,12 +480,15 @@
       ".fthofBtn:hover{background:rgba(255,255,255,0.25);}" +
       ".fthofBtn.fthofPrimary{background:rgba(80,160,255,0.35);border-color:rgba(120,190,255,0.7);}" +
       ".fthofMatch{font-size:10px;color:#ccc;margin-top:2px;}" +
-      "#fthofPlanTable{border-collapse:collapse;margin:6px auto;font-size:11px;}" +
+      "#prompt.fthofPlanPrompt{width:min(760px,calc(100vw - 40px)) !important;left:50% !important;margin-left:0 !important;transform:translateX(-50%);box-sizing:border-box;}" +
+      "#fthofPlanWrap{max-height:calc(100vh - 230px);min-height:120px;overflow:auto;margin:6px 0;}" +
+      "#fthofPlanTable{border-collapse:collapse;width:100%;font-size:11px;}" +
       "#fthofPlanTable td,#fthofPlanTable th{padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);text-align:left;white-space:nowrap;}" +
-      "#fthofPlanTable th{color:#ccc;}" +
+      "#fthofPlanTable th{color:#ccc;position:sticky;top:0;background:#1a1a1a;z-index:1;}" +
       "#fthofPlanTable tr.fthofHit td{background:rgba(100,255,100,0.08);}" +
       "#fthofPlanTable tr.fthofHit td.fthofHitCell{background:rgba(100,255,100,0.22);}" +
-      "#fthofPlanTable th{text-align:center;}" +
+      ".fthofGc{display:inline-block;padding:0 3px;border-radius:2px;background:rgba(255,255,255,0.12);color:#ccc;font-size:10px;font-weight:normal;}" +
+      ".fthofGc.fthofEf{background:rgba(255,51,68,0.25);color:#ff8090;}" +
       "#fthofPlanTable .fthofSeasonCol{border-left:1px solid rgba(255,255,255,0.25);}" +
       ".fthofSeason{color:#8cf;margin-left:2px;}" +
       "#fthofAscendPanel{position:fixed;left:12px;bottom:12px;width:370px;max-height:calc(100vh - 24px);overflow-y:auto;z-index:100000000;background:rgba(0,0,0,0.85);border:1px solid rgba(255,255,255,0.3);border-radius:6px;box-shadow:0 0 12px #000;color:#fff;font-family:Tahoma,Arial,sans-serif;font-size:11px;padding:8px;display:none;}" +
@@ -618,30 +621,35 @@
     var hits = filterHits(state.view, settings.filters, state.baseFail, 200).hits;
     var rows = "";
     for (var c = 0; c < 40; c++) {
-      var o = state.view.at(c),
-        alt = state.view.seasonAt(c);
+      var o = state.view.at(c);
       var th = backfireThreshold(o.roll, state.baseFail);
-      var sameCell = hits[c] === 1 ? ' class="fthofHitCell"' : "",
-        altCell = hits[c] === 2 ? ' class="fthofHitCell"' : "";
       rows +=
-        "<tr" + (hits[c] ? ' class="fthofHit"' : "") + "><td>+" + c + "</td><td>" + (state.index + c + 1) + "</td><td><b>" + forceSpan(resolve(o, state.failNow)) + "</b></td>" +
-        "<td" + sameCell + ">" + forceSpan(o.win) + "</td><td" + sameCell + ">" + forceSpan(o.fail) + "</td>" +
-        '<td class="fthofSeasonCol"' + altCell + ">" + forceSpan(alt.win) + "</td><td" + altCell + ">" + forceSpan(alt.fail) + "</td>" +
-        "<td>" + (th === 0 ? '<span style="color:#f66;">always</span>' : th + "+ GC") + "</td><td>" + gfdLabel(gfdPrediction(M, state, c), true) + "</td></tr>";
+        "<tr" + (hits[c] ? ' class="fthofHit"' : "") + "><td>+" + c + ' <small class="fthofMuted">#' + (state.index + c + 1) + "</small></td>" +
+        "<td" + (hits[c] === 1 ? ' class="fthofHitCell"' : "") + ">" + planCell(o, th, state.failNow) + "</td>" +
+        '<td class="fthofSeasonCol' + (hits[c] === 2 ? " fthofHitCell" : "") + '">' + planCell(state.view.seasonAt(c), th, state.failNow) + "</td>" +
+        "<td>" + gfdLabel(gfdPrediction(M, state, c), true) + "</td></tr>";
     }
     Game.Prompt(
       "<id FtHoFPlanner><h3>Force the Hand of Fate planner</h3>" +
-        '<div class="block" style="font-size:11px;">Seed <b>' + esc(state.seed) + "</b> &middot; " + state.index + " spells cast so far &middot; " + state.onScreen + " GC on screen &middot; season: " + esc(Game.season || "none") +
+        '<div class="block" style="font-size:11px;">Seed <b>' + esc(state.seed) + "</b> &middot; " + state.index + " spells cast &middot; " + state.onScreen + " GC on screen &middot; season: " + esc(Game.season || "none") +
         (state.env.dragonflight ? " &middot; Dragonflight (no Click Frenzy)" : "") + (!state.env.buildings10 ? " &middot; fewer than 10 buildings (no Building Special)" : "") +
-        '<table id="fthofPlanTable"><tr><th rowspan="2">Cast</th><th rowspan="2">#</th><th rowspan="2">Now</th><th colspan="2">No season change</th><th colspan="2" class="fthofSeasonCol">Season change <small>(' + seasonChangeLabel(state.env) + ')</small></th><th rowspan="2">Backfires at</th><th rowspan="2">GFD here</th></tr>' +
-        '<tr><th>Success</th><th>Backfire</th><th class="fthofSeasonCol">Success</th><th>Backfire</th></tr>' + rows + "</table>" +
-        '<small class="fthofMuted">Every spell you cast (not just FtHoF) moves you down one row. Changing the season does not. Success or backfire is the same with or without a season change (see "Backfires at"). Green rows match your filters' +
-        (settings.seasonChanges ? "; the highlighted pair shows whether that cast needs a season change" : "") + ". GFD uses the next row for the spell it casts.</small></div>",
+        '<div id="fthofPlanWrap"><table id="fthofPlanTable"><thead><tr><th>Cast</th><th>No season change</th><th class="fthofSeasonCol">Season change <small>(' + seasonChangeLabel(state.env) + ")</small></th><th>GFD here</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        '<small class="fthofMuted"><span style="color:#f66;">Red</span> = backfires. <span class="fthofGc">N GC</span> = backfires with N or more golden cookies on screen. <span class="fthofGc fthofEf">N GC &rarr; Elder Frenzy</span> = the backfire is Elder Frenzy: let N golden cookies stack on screen (don\'t click them) before casting. Every spell you cast moves you down one row; changing the season does not. Green rows match your filters' +
+        (settings.seasonChanges ? " (the brighter cell is the season to cast in)" : "") + ".</small></div>",
       [["Close", "Game.ClosePrompt();"]],
       0,
-      "widePrompt"
+      "widePrompt fthofPlanPrompt"
     );
   };
+
+  /** Planner cell: the result with the current backfire chance, in red if it backfires. */
+  function planCell(o, threshold, failChance) {
+    if (o.roll >= 1 - failChance) return '<span style="color:#f66;">' + esc(FORCES[o.fail].name) + "</span>";
+    if (o.fail === "blood frenzy") {
+      return forceSpan(o.win) + ' <span class="fthofGc fthofEf" title="Let ' + threshold + ' golden cookies stack on screen (don\'t click them) and this cast backfires into Elder Frenzy">' + threshold + " GC &rarr; Elder Frenzy</span>";
+    }
+    return forceSpan(o.win) + ' <span class="fthofGc" title="Backfires with ' + threshold + '+ golden cookies on screen">' + threshold + " GC</span>";
+  }
 
   /* ---------------- ascension: seed reroll ---------------- */
 
