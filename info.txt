@@ -1,0 +1,12 @@
+{
+	"Name": "FtHoF Planner",
+	"ID": "fthof planner",
+	"Author": "magic",
+	"Description": "Shows upcoming Force the Hand of Fate results in the Grimoire and rerolls your ascension seed until it matches your combo filters.",
+	"ModVersion": 1,
+	"GameVersion": 2.052,
+	"Date": "24/09/2026",
+	"Dependencies": [],
+	"Disabled": 0,
+	"AllowSteamAchievs": 0
+}
